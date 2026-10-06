@@ -9,6 +9,7 @@ from app.services.data_store import (
     get_db_day_of_week,
     DAY_NAMES,
 )
+from app.services.doctor_service import doctor_service
 from app.schemas.appointment import (
     AppointmentCreate,
     AppointmentResponse,
@@ -264,7 +265,14 @@ class AppointmentService:
             )
 
         # 2. Validate Doctor exists and is active
-        doc = db_store.get_doctor_by_id(payload.doctor_id)
+        try:
+            doc_res = doctor_service.get_doctor_by_id(payload.doctor_id)
+            doc = doc_res.model_dump() if hasattr(doc_res, "model_dump") else doc_res
+        except HTTPException:
+            doc = None
+        except Exception:
+            doc = db_store.get_doctor_by_id(payload.doctor_id)
+
         if not doc or not doc.get("is_active", True):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -298,11 +306,15 @@ class AppointmentService:
 
         # 5. Validate slot falls within Doctor's active availability for that day
         db_day = get_db_day_of_week(appt_date_obj)
-        doctor_slots = db_store.get_doctor_availability(payload.doctor_id, only_active=True)
+        try:
+            doctor_slots_res = doctor_service.get_doctor_availability(payload.doctor_id)
+            doctor_slots = [s.model_dump() if hasattr(s, "model_dump") else s for s in doctor_slots_res]
+        except Exception:
+            doctor_slots = db_store.get_doctor_availability(payload.doctor_id, only_active=True)
         
         is_available = False
         for slot in doctor_slots:
-            if slot["day_of_week"] == db_day:
+            if slot["day_of_week"] == db_day and slot.get("is_active", True):
                 slot_start = parse_time_str(slot["start_time"])
                 slot_end = parse_time_str(slot["end_time"])
                 if start_t >= slot_start and end_t <= slot_end:

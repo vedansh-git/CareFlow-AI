@@ -1,12 +1,16 @@
 import logging
+import httpx
 from datetime import datetime, timedelta, time
 from typing import Any, Dict, List, Optional
+from app.core.config import settings
 from app.services.data_store import (
     db_store,
     parse_time_str,
+    format_time_str,
     get_db_day_of_week,
     DAY_NAMES,
 )
+from app.services.doctor_service import doctor_service
 from app.services.appointment_service import appointment_service
 from app.schemas.appointment import AppointmentCreate
 
@@ -27,7 +31,7 @@ AGENT_TOOLS_SCHEMA: List[Dict[str, Any]] = [
                     },
                     "name": {
                         "type": "string",
-                        "description": "Doctor's name or partial name (e.g. 'Sarah', 'Jenkins', 'Vance').",
+                        "description": "Doctor's name or partial name (e.g. 'Sarah', 'Jenkins', 'Vance', 'Bidhan').",
                     },
                     "max_fee": {
                         "type": "number",
@@ -187,7 +191,12 @@ def _compute_available_slots(doctor_id: str, date_str: str) -> Dict[str, Any]:
     except ValueError:
         return {"error": f"Invalid date format '{date_str}'. Please use YYYY-MM-DD."}
 
-    doc = db_store.get_doctor_by_id(doctor_id)
+    try:
+        doc_res = doctor_service.get_doctor_by_id(doctor_id)
+        doc = doc_res.model_dump() if hasattr(doc_res, "model_dump") else doc_res
+    except Exception:
+        doc = db_store.get_doctor_by_id(doctor_id)
+
     if not doc:
         return {"error": f"Doctor with ID '{doctor_id}' was not found."}
 
@@ -195,8 +204,13 @@ def _compute_available_slots(doctor_id: str, date_str: str) -> Dict[str, Any]:
     day_name = DAY_NAMES.get(day_of_week, "Unknown")
 
     # Get doctor's weekly active schedule
-    all_schedules = db_store.get_doctor_availability(doctor_id, only_active=True)
-    matching_schedules = [s for s in all_schedules if s["day_of_week"] == day_of_week]
+    try:
+        all_schedules_res = doctor_service.get_doctor_availability(doctor_id)
+        all_schedules = [s.model_dump() if hasattr(s, "model_dump") else s for s in all_schedules_res]
+    except Exception:
+        all_schedules = db_store.get_doctor_availability(doctor_id, only_active=True)
+
+    matching_schedules = [s for s in all_schedules if s["day_of_week"] == day_of_week and s.get("is_active", True)]
 
     if not matching_schedules:
         return {
@@ -209,10 +223,31 @@ def _compute_available_slots(doctor_id: str, date_str: str) -> Dict[str, Any]:
         }
 
     # Get doctor's existing appointments for this date
-    doctor_appts = [
-        a for a in db_store.appointments.values()
-        if a["doctor_id"] == doctor_id and a["appointment_date"] == date_str and a.get("status") != "cancelled"
-    ]
+    doctor_appts = []
+    if settings.SUPABASE_URL:
+        try:
+            profile_key = settings.SUPABASE_SERVICE_ROLE_KEY or settings.SUPABASE_ANON_KEY
+            headers = {"apikey": profile_key, "Authorization": f"Bearer {profile_key}"}
+            with httpx.Client(timeout=3.0) as client:
+                res = client.get(
+                    f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/appointments?doctor_id=eq.{doctor_id}&appointment_date=eq.{date_str}&status=neq.cancelled&select=start_time,end_time",
+                    headers=headers
+                )
+                if res.status_code == 200 and isinstance(res.json(), list):
+                    for a in res.json():
+                        doctor_appts.append({
+                            "start_time": format_time_str(a["start_time"]),
+                            "end_time": format_time_str(a["end_time"]),
+                        })
+        except Exception:
+            pass
+
+    for a in db_store.appointments.values():
+        if a["doctor_id"] == doctor_id and a["appointment_date"] == date_str and a.get("status") != "cancelled":
+            doctor_appts.append({
+                "start_time": format_time_str(a["start_time"]),
+                "end_time": format_time_str(a["end_time"]),
+            })
 
     available_slots = []
 
@@ -264,7 +299,7 @@ def execute_tool(
     current_user: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
-    Execute tool server-side using existing services and store data.
+    Execute tool server-side using existing services and live data.
     Security: The authenticated `current_user` session is injected and enforced.
     """
     logger.info(f"Executing agent tool: {name} with args: {args}")
@@ -275,7 +310,12 @@ def execute_tool(
             query_name = (args.get("name") or "").lower().strip()
             max_fee = args.get("max_fee")
 
-            all_docs = db_store.get_all_active_doctors()
+            try:
+                all_docs_res = doctor_service.get_all_active_doctors()
+                all_docs = [d.model_dump() if hasattr(d, "model_dump") else d for d in all_docs_res]
+            except Exception:
+                all_docs = db_store.get_all_active_doctors()
+
             filtered = []
             for d in all_docs:
                 if specialty and specialty not in (d.get("specialty") or "").lower():
@@ -307,12 +347,23 @@ def execute_tool(
             doctor_id = args.get("doctor_id")
             if not doctor_id:
                 return {"error": "doctor_id is required."}
-            doc = db_store.get_doctor_by_id(doctor_id)
+
+            try:
+                doc_res = doctor_service.get_doctor_by_id(doctor_id)
+                doc = doc_res.model_dump() if hasattr(doc_res, "model_dump") else doc_res
+            except Exception:
+                doc = db_store.get_doctor_by_id(doctor_id)
+
             if not doc:
                 return {"error": f"Doctor with ID '{doctor_id}' not found."}
             
             # Fetch weekly availability summary
-            avail = db_store.get_doctor_availability(doctor_id, only_active=True)
+            try:
+                avail_res = doctor_service.get_doctor_availability(doctor_id)
+                avail = [s.model_dump() if hasattr(s, "model_dump") else s for s in avail_res]
+            except Exception:
+                avail = db_store.get_doctor_availability(doctor_id, only_active=True)
+
             schedule_summary = [
                 f"{s.get('day_name')}: {s.get('start_time')} - {s.get('end_time')}"
                 for s in avail
@@ -359,7 +410,12 @@ def execute_tool(
             if not doctor_id or not appt_date or not appt_time:
                 return {"error": "doctor_id, appointment_date, and appointment_time are required."}
 
-            doc = db_store.get_doctor_by_id(doctor_id)
+            try:
+                doc_res = doctor_service.get_doctor_by_id(doctor_id)
+                doc = doc_res.model_dump() if hasattr(doc_res, "model_dump") else doc_res
+            except Exception:
+                doc = db_store.get_doctor_by_id(doctor_id)
+
             if not doc:
                 return {"error": f"Doctor '{doctor_id}' not found."}
 
@@ -437,7 +493,11 @@ def execute_tool(
 
             # Delegate to existing appointment service for authentication & double-booking protection
             created = appointment_service.create_appointment(payload, current_user)
-            doc = db_store.get_doctor_by_id(doctor_id)
+            try:
+                doc_res = doctor_service.get_doctor_by_id(doctor_id)
+                doc = doc_res.model_dump() if hasattr(doc_res, "model_dump") else doc_res
+            except Exception:
+                doc = db_store.get_doctor_by_id(doctor_id)
 
             return {
                 "status": "booking_success",
@@ -452,3 +512,4 @@ def execute_tool(
     except Exception as e:
         logger.error(f"Error executing agent tool {name}: {str(e)}", exc_info=True)
         return {"error": f"Tool execution failed: {str(e)}"}
+
