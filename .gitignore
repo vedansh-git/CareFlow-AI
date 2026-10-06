@@ -1,0 +1,51 @@
+# Node dependencies & logs
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment files
+.env
+.env.local
+.env.*.local
+frontend/.env
+backend/.env
+
+# Python Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+
+# Python cache & bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Testing & Coverage
+.pytest_cache/
+coverage/
+.coverage
+htmlcov/
+
+# Production build artifacts
+dist/
+build/
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Operating System files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local development / temporary scripts
+backend/scratch_*.py
+
+# Generated Vite files
+*.timestamp-*.mjs
