@@ -10,4 +10,5 @@ cryptography>=42.0.0,<44.0.0
 sentence-transformers>=2.2.0
 pypdf>=4.0.0
 reportlab>=4.0.0
-
+python-multipart>=0.0.9
+python-multipart
