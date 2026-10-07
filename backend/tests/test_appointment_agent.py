@@ -33,26 +33,146 @@ def reset_store():
 
 
 # ==============================================================================
-# 1. TEST AGENT TOOL EXECUTION
+# 1. TEST AGENT TOOL EXECUTION & SCHEMA
 # ==============================================================================
 
+def test_agent_tools_schema_structure_and_nullability():
+    """Verify tool schemas expose proper nullable types and do not require optional fields."""
+    tool_map = {t["function"]["name"]: t["function"] for t in AGENT_TOOLS_SCHEMA}
+    assert "search_doctors" in tool_map
+    assert "get_doctor_details" in tool_map
+    assert "check_doctor_availability" in tool_map
+    assert "get_my_appointments" in tool_map
+    assert "cancel_appointment" in tool_map
+    assert "prepare_booking_confirmation" in tool_map
+    assert "book_appointment" in tool_map
+
+    # 1. search_doctors: all parameters must be optional and accept null
+    sd_params = tool_map["search_doctors"]["parameters"]
+    assert sd_params["required"] == []
+    assert sd_params["properties"]["specialty"]["type"] == ["string", "null"]
+    assert sd_params["properties"]["name"]["type"] == ["string", "null"]
+    assert sd_params["properties"]["max_fee"]["type"] == ["number", "null"]
+
+    # 2. get_doctor_details: doctor_id is strictly required and non-nullable
+    gdd_params = tool_map["get_doctor_details"]["parameters"]
+    assert gdd_params["required"] == ["doctor_id"]
+    assert gdd_params["properties"]["doctor_id"]["type"] == "string"
+
+    # 3. check_doctor_availability: doctor_id and appointment_date are strictly required
+    cda_params = tool_map["check_doctor_availability"]["parameters"]
+    assert set(cda_params["required"]) == {"doctor_id", "appointment_date"}
+    assert cda_params["properties"]["doctor_id"]["type"] == "string"
+    assert cda_params["properties"]["appointment_date"]["type"] == "string"
+
+    # 4. cancel_appointment: appointment_id is strictly required
+    ca_params = tool_map["cancel_appointment"]["parameters"]
+    assert ca_params["required"] == ["appointment_id"]
+    assert ca_params["properties"]["appointment_id"]["type"] == "string"
+
+    # 5. prepare_booking_confirmation: optional fields are nullable
+    pbc_params = tool_map["prepare_booking_confirmation"]["parameters"]
+    assert set(pbc_params["required"]) == {"doctor_id", "appointment_date", "appointment_time"}
+    assert pbc_params["properties"]["consultation_type"]["type"] == ["string", "null"]
+    assert pbc_params["properties"]["notes"]["type"] == ["string", "null"]
+
+    # 6. book_appointment: optional fields are nullable
+    ba_params = tool_map["book_appointment"]["parameters"]
+    assert set(ba_params["required"]) == {"doctor_id", "appointment_date", "appointment_time", "confirmed"}
+    assert ba_params["properties"]["consultation_type"]["type"] == ["string", "null"]
+    assert ba_params["properties"]["notes"]["type"] == ["string", "null"]
+
+
 def test_tool_search_doctors():
-    # 1. Search by specialty
+    # 1. Search by specialty only
     res = execute_tool("search_doctors", {"specialty": "Cardiology"}, MOCK_PATIENT_USER)
     assert res["count"] >= 1
     assert any("Jenkins" in d["full_name"] for d in res["doctors"])
     assert res["doctors"][0]["clinic_address"] is not None
 
-    # 2. Search by name
+    # 2. Search by name only
     res2 = execute_tool("search_doctors", {"name": "Marcus"}, MOCK_PATIENT_USER)
     assert res2["count"] >= 1
     assert "Dr. Marcus Vance" in [d["full_name"] for d in res2["doctors"]]
 
-    # 3. Search by max_fee
+    # 3. Search by max_fee only
     res3 = execute_tool("search_doctors", {"max_fee": 130.0}, MOCK_PATIENT_USER)
     for doc in res3["doctors"]:
         if doc.get("consultation_fee") is not None:
             assert doc["consultation_fee"] <= 130.0
+
+    # 4. Search with name provided and other filters explicitly passed as null
+    res4 = execute_tool(
+        "search_doctors",
+        {"name": "Sarah", "specialty": None, "max_fee": None},
+        MOCK_PATIENT_USER,
+    )
+    assert res4["count"] >= 1
+    assert any("Sarah" in d["full_name"] for d in res4["doctors"])
+
+    # 5. Search with specialty provided and other filters explicitly passed as null
+    res5 = execute_tool(
+        "search_doctors",
+        {"name": None, "specialty": "Cardiology", "max_fee": None},
+        MOCK_PATIENT_USER,
+    )
+    assert res5["count"] >= 1
+    assert all("Cardiology" in (d.get("specialty") or "") for d in res5["doctors"])
+
+    # 6. Search with max_fee provided and other filters explicitly passed as null
+    res6 = execute_tool(
+        "search_doctors",
+        {"name": None, "specialty": None, "max_fee": 130.0},
+        MOCK_PATIENT_USER,
+    )
+    assert res6["count"] >= 1
+    assert all(d["consultation_fee"] <= 130.0 for d in res6["doctors"] if d.get("consultation_fee") is not None)
+
+    # 7. Search with all filters explicitly passed as null or empty dict
+    res7 = execute_tool(
+        "search_doctors",
+        {"name": None, "specialty": None, "max_fee": None},
+        MOCK_PATIENT_USER,
+    )
+    res_empty = execute_tool("search_doctors", {}, MOCK_PATIENT_USER)
+    assert res7["count"] == res_empty["count"]
+    assert res7["count"] >= 2
+
+
+def test_tool_booking_with_explicit_null_optional_fields():
+    doc_id = "doc-sarah-jenkins-01"
+
+    # 1. prepare_booking_confirmation with null consultation_type and null notes
+    res = execute_tool(
+        "prepare_booking_confirmation",
+        {
+            "doctor_id": doc_id,
+            "appointment_date": "2026-10-05",
+            "appointment_time": "09:30",
+            "consultation_type": None,
+            "notes": None,
+        },
+        MOCK_PATIENT_USER,
+    )
+    assert res["status"] == "ready_for_confirmation"
+    assert res["confirmation_details"]["consultation_type"] == "in_person"
+    assert res["confirmation_details"]["notes"] == ""
+
+    # 2. book_appointment with null consultation_type and null notes
+    book_res = execute_tool(
+        "book_appointment",
+        {
+            "doctor_id": doc_id,
+            "appointment_date": "2026-10-05",
+            "appointment_time": "09:30",
+            "consultation_type": None,
+            "notes": None,
+            "confirmed": True,
+        },
+        MOCK_PATIENT_USER,
+    )
+    assert book_res["status"] == "booking_success"
+    assert "IN_PERSON" in book_res["appointment"]["reason"]
 
 
 def test_tool_get_doctor_details():

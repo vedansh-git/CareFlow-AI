@@ -26,16 +26,16 @@ AGENT_TOOLS_SCHEMA: List[Dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "specialty": {
-                        "type": "string",
-                        "description": "Medical specialty (e.g., 'Cardiology', 'Neurology', 'Pediatrics', 'General Medicine', 'Orthopedics').",
+                        "type": ["string", "null"],
+                        "description": "Medical specialty (e.g., 'Cardiology', 'Neurology', 'Pediatrics', 'General Medicine', 'Orthopedics'). Optional.",
                     },
                     "name": {
-                        "type": "string",
-                        "description": "Doctor's name or partial name (e.g. 'Sarah', 'Jenkins', 'Vance', 'Bidhan').",
+                        "type": ["string", "null"],
+                        "description": "Doctor's name or partial name (e.g. 'Sarah', 'Jenkins', 'Vance', 'Bidhan'). Optional.",
                     },
                     "max_fee": {
-                        "type": "number",
-                        "description": "Maximum consultation fee in dollars.",
+                        "type": ["number", "null"],
+                        "description": "Maximum consultation fee in dollars. Optional.",
                     },
                 },
                 "required": [],
@@ -130,13 +130,13 @@ AGENT_TOOLS_SCHEMA: List[Dict[str, Any]] = [
                         "description": "Slot start time in HH:MM (24-hour) format (e.g., '09:00', '14:30').",
                     },
                     "consultation_type": {
-                        "type": "string",
-                        "enum": ["in_person", "telehealth"],
-                        "description": "Type of consultation.",
+                        "type": ["string", "null"],
+                        "enum": ["in_person", "telehealth", None],
+                        "description": "Type of consultation ('in_person' or 'telehealth'). Optional.",
                     },
                     "notes": {
-                        "type": "string",
-                        "description": "Reason or clinical notes for the appointment.",
+                        "type": ["string", "null"],
+                        "description": "Reason or clinical notes for the appointment. Optional.",
                     },
                 },
                 "required": ["doctor_id", "appointment_date", "appointment_time"],
@@ -164,13 +164,13 @@ AGENT_TOOLS_SCHEMA: List[Dict[str, Any]] = [
                         "description": "Slot start time in HH:MM format (e.g. '09:00').",
                     },
                     "consultation_type": {
-                        "type": "string",
-                        "enum": ["in_person", "telehealth"],
-                        "description": "Type of consultation (default: 'in_person').",
+                        "type": ["string", "null"],
+                        "enum": ["in_person", "telehealth", None],
+                        "description": "Type of consultation (default: 'in_person'). Optional.",
                     },
                     "notes": {
-                        "type": "string",
-                        "description": "Reason or clinical notes for the appointment.",
+                        "type": ["string", "null"],
+                        "description": "Reason or clinical notes for the appointment. Optional.",
                     },
                     "confirmed": {
                         "type": "boolean",
@@ -306,9 +306,19 @@ def execute_tool(
 
     try:
         if name == "search_doctors":
-            specialty = (args.get("specialty") or "").lower().strip()
-            query_name = (args.get("name") or "").lower().strip()
-            max_fee = args.get("max_fee")
+            raw_specialty = args.get("specialty")
+            specialty = raw_specialty.lower().strip() if isinstance(raw_specialty, str) else ""
+
+            raw_name = args.get("name")
+            query_name = raw_name.lower().strip() if isinstance(raw_name, str) else ""
+
+            raw_max_fee = args.get("max_fee")
+            max_fee = None
+            if raw_max_fee is not None:
+                try:
+                    max_fee = float(raw_max_fee)
+                except (ValueError, TypeError):
+                    max_fee = None
 
             try:
                 all_docs_res = doctor_service.get_all_active_doctors()
@@ -323,7 +333,7 @@ def execute_tool(
                 if query_name and query_name not in (d.get("full_name") or "").lower():
                     continue
                 if max_fee is not None and d.get("consultation_fee") is not None:
-                    if float(d.get("consultation_fee")) > float(max_fee):
+                    if float(d.get("consultation_fee")) > max_fee:
                         continue
                 filtered.append({
                     "id": d["id"],
@@ -404,8 +414,10 @@ def execute_tool(
             doctor_id = args.get("doctor_id")
             appt_date = args.get("appointment_date")
             appt_time = args.get("appointment_time")
-            consultation_type = args.get("consultation_type", "in_person")
-            notes = args.get("notes", "")
+            raw_ctype = args.get("consultation_type")
+            consultation_type = raw_ctype.strip() if isinstance(raw_ctype, str) and raw_ctype.strip() else "in_person"
+            raw_notes = args.get("notes")
+            notes = raw_notes.strip() if isinstance(raw_notes, str) else ""
 
             if not doctor_id or not appt_date or not appt_time:
                 return {"error": "doctor_id, appointment_date, and appointment_time are required."}
@@ -463,9 +475,11 @@ def execute_tool(
             doctor_id = args.get("doctor_id")
             appt_date = args.get("appointment_date")
             appt_time = args.get("appointment_time")
-            consultation_type = args.get("consultation_type", "in_person")
-            notes = args.get("notes", "")
-            confirmed = args.get("confirmed", False)
+            raw_ctype = args.get("consultation_type")
+            consultation_type = raw_ctype.strip() if isinstance(raw_ctype, str) and raw_ctype.strip() else "in_person"
+            raw_notes = args.get("notes")
+            notes = raw_notes.strip() if isinstance(raw_notes, str) else ""
+            confirmed = bool(args.get("confirmed", False))
 
             if not confirmed:
                 return {
